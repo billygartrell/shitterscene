@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShitterScene</title>
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace(`http://127.0.0.1:5175/?v=multi-review-2${window.location.hash || "#map"}`);
+      }
+    </script>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      referrerpolicy="strict-origin-when-cross-origin"
+    />
+    <link rel="stylesheet" href="/styles.css?v=multi-review-2" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#map" aria-label="ShitterScene home">
+        <span class="brand-mark">SS</span>
+        <span class="brand-name">ShitterScene</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a class="user-link" href="#profile" data-nav-link="profile">My Profile</a>
+        <a class="nav-button" href="#new" data-nav-link="new">NEW SHITTER</a>
+        <a class="login-link" href="#login" data-nav-link="login">Log in</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="login-view" class="view login-view" aria-labelledby="login-title" hidden>
+        <section class="login-panel">
+          <div>
+            <p class="eyebrow">Welcome to ShitterScene</p>
+            <h1 id="login-title">Log in</h1>
+            <p id="login-intro" class="intro">Log in with email to start logging bathrooms.</p>
+          </div>
+
+          <form id="login-existing-form" class="login-form">
+            <label for="login-email">Email or username</label>
+            <div class="login-row">
+              <input id="login-email" name="email" type="text" autocomplete="username" placeholder="you@example.com or test" />
+              <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" />
+              <button type="submit">Log in</button>
+            </div>
+          </form>
+          <p id="login-switch-to-create" class="auth-switch-copy">
+            New here?
+            <button type="button">Create an account</button>
+          </p>
+
+          <form id="login-create-form" class="login-form" hidden>
+            <label for="login-new-user-name">Create account</label>
+            <div class="login-row">
+              <input id="login-new-user-name" name="displayName" type="text" maxlength="60" placeholder="Your display name" />
+              <input id="signup-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" />
+              <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="6" placeholder="Password" />
+              <button type="submit">Create account</button>
+            </div>
+          </form>
+          <p id="login-switch-to-login" class="auth-switch-copy" hidden>
+            Already have an account?
+            <button type="button">Log in</button>
+          </p>
+
+          <p id="login-message" class="form-message" role="status"></p>
+        </section>
+      </section>
+
+      <section id="map-view" class="view map-view" aria-label="ShitterScene map dashboard">
+        <section class="map-stage" aria-label="Interactive toilet map">
+          <div id="map-viewport" class="map-viewport" tabindex="0">
+            <div id="osm-map" class="osm-map" hidden></div>
+            <div id="map-canvas" class="map-canvas">
+              <svg class="usa-map" viewBox="0 0 1000 620" role="img" aria-label="Stylized map of the United States">
+                <path
+                  d="M169 179 L245 119 L392 92 L541 99 L678 128 L798 181 L876 279 L835 372 L735 419 L622 451 L515 479 L379 462 L272 418 L188 342 L132 247 Z"
+                />
+                <path d="M159 390 L224 359 L285 401 L254 468 L171 487 L119 444 Z" />
+                <path d="M760 468 L808 444 L860 470 L851 519 L794 535 L749 507 Z" />
+              </svg>
+              <div id="map-pins" class="map-pins"></div>
+            </div>
+            <div class="map-search-control">
+              <form id="map-search-form" class="map-search-form" role="search">
+                <label class="visually-hidden" for="map-search-query">Search city or place</label>
+                <input
+                  id="map-search-query"
+                  name="q"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="Search city or place"
+                />
+                <button class="map-search-submit" type="submit">Search</button>
+                <button id="locate-user" class="locate-user" type="button" aria-label="Use my location" title="Use my location">
+                  <svg class="location-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 21s7-5.1 7-11a7 7 0 1 0-14 0c0 5.9 7 11 7 11Z" />
+                    <circle cx="12" cy="10" r="2.5" />
+                  </svg>
+                </button>
+              </form>
+              <p id="location-status" class="location-status" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+
+        <aside class="stats-sidebar" aria-label="Global stats">
+          <section class="stats-section">
+            <h1>Global Stats</h1>
+            <div id="fun-metrics" class="metric-grid"></div>
+          </section>
+
+          <section class="stats-section">
+            <h2>Recently added bathrooms</h2>
+            <div id="recent-list" class="sidebar-list"></div>
+          </section>
+
+          <section class="stats-section">
+            <h2>Top bathrooms</h2>
+            <div id="top-list" class="sidebar-list"></div>
+          </section>
+
+        </aside>
+      </section>
+
+      <section id="new-view" class="view form-view" aria-labelledby="page-title" hidden>
+        <section class="entry-panel">
+          <div class="create-header">
+            <div>
+              <p class="eyebrow">Add a new bathroom report</p>
+              <h1 id="page-title">New Shitter</h1>
+              <p class="intro">
+                Log a bathroom at this place with a rating, review, and optional evidence.
+              </p>
+            </div>
+            <a class="cancel-create" href="#map">Cancel</a>
+          </div>
+
+          <form id="toilet-form" class="toilet-form">
+            <label for="location">Place</label>
+            <input
+              id="location"
+              name="location"
+              type="text"
+              maxlength="160"
+              placeholder="Place, address, neighborhood, or city"
+              required
+            />
+
+            <input id="state" name="state" type="hidden" />
+            <input id="latitude" name="latitude" type="hidden" />
+            <input id="longitude" name="longitude" type="hidden" />
+            <p id="map-origin-status" class="map-origin-status" hidden></p>
+
+            <fieldset class="rating-field">
+              <legend>Star ranking</legend>
+              <div class="star-picker" aria-describedby="rating-status">
+                <input id="rating1" class="visually-hidden" name="rating" type="radio" value="1" required />
+                <label class="star-option" for="rating1" aria-label="1 star">★</label>
+                <input id="rating2" class="visually-hidden" name="rating" type="radio" value="2" />
+                <label class="star-option" for="rating2" aria-label="2 stars">★</label>
+                <input id="rating3" class="visually-hidden" name="rating" type="radio" value="3" />
+                <label class="star-option" for="rating3" aria-label="3 stars">★</label>
+                <input id="rating4" class="visually-hidden" name="rating" type="radio" value="4" />
+                <label class="star-option" for="rating4" aria-label="4 stars">★</label>
+                <input id="rating5" class="visually-hidden" name="rating" type="radio" value="5" />
+                <label class="star-option" for="rating5" aria-label="5 stars">★</label>
+              </div>
+              <p id="rating-status" class="rating-status">No rating selected</p>
+            </fieldset>
+
+            <fieldset class="access-field">
+              <legend>Free access?</legend>
+              <div class="access-picker">
+                <input id="freeAccessYes" class="visually-hidden" name="freeAccess" type="radio" value="yes" />
+                <label class="access-option" for="freeAccessYes">Yes</label>
+                <input id="freeAccessNo" class="visually-hidden" name="freeAccess" type="radio" value="no" />
+                <label class="access-option" for="freeAccessNo">No</label>
+                <input id="freeAccessUnsure" class="visually-hidden" name="freeAccess" type="radio" value="unsure" checked />
+                <label class="access-option" for="freeAccessUnsure">Not sure</label>
+              </div>
+            </fieldset>
+
+            <label for="review">Text review</label>
+            <textarea
+              id="review"
+              name="review"
+              maxlength="1200"
+              rows="6"
+              placeholder="Give us the stall report."
+              required
+            ></textarea>
+
+            <fieldset class="photo-field">
+              <legend>Optional photo</legend>
+              <div class="photo-actions">
+                <input
+                  id="photoUpload"
+                  name="photoUpload"
+                  class="visually-hidden"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                />
+                <label class="photo-action" for="photoUpload">Upload file</label>
+
+                <input
+                  id="photoCamera"
+                  name="photoCamera"
+                  class="visually-hidden"
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                />
+                <label class="photo-action" for="photoCamera">Take photo</label>
+              </div>
+              <p id="photo-status" class="photo-status">No photo selected</p>
+            </fieldset>
+
+            <p id="form-message" class="form-message" role="status"></p>
+            <button type="submit">Add toilet</button>
+          </form>
+        </section>
+      </section>
+
+      <section id="detail-view" class="view report-view" aria-labelledby="report-title" hidden>
+        <section id="report-panel" class="report-panel" aria-live="polite"></section>
+      </section>
+
+      <section id="profile-view" class="view profile-view" aria-labelledby="profile-title" hidden>
+        <section class="profile-panel">
+          <div class="profile-page-header">
+            <div class="profile-hero">
+              <div class="profile-avatar" aria-hidden="true">SS</div>
+              <div>
+                <p class="eyebrow">My Profile</p>
+                <h1 id="profile-title">Bathroom Scout</h1>
+                <p class="intro">
+                  Switch between local scouts and see each person’s bathroom-report history.
+                </p>
+              </div>
+            </div>
+            <a class="cancel-create" href="#map">Back to map</a>
+          </div>
+
+          <div id="profile-metrics" class="profile-metrics"></div>
+
+          <section class="profile-section account-section">
+            <h2>Account</h2>
+            <div class="account-card">
+              <div>
+                <span>Logged in as</span>
+                <strong id="account-name">Bathroom Scout</strong>
+                <p id="account-meta">Local prototype account</p>
+              </div>
+              <button id="logout-user" type="button">Log out</button>
+            </div>
+          </section>
+
+          <section class="profile-section">
+            <h2>Your latest reports</h2>
+            <div id="profile-recent-list" class="sidebar-list"></div>
+          </section>
+
+          <section class="profile-section">
+            <h2>Scout notes</h2>
+            <ul class="profile-notes">
+              <li>Profiles are local to this prototype for now.</li>
+              <li>New bathroom reports are saved under the active scout.</li>
+              <li>Passwords, friends, and shared logins can plug in later.</li>
+            </ul>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      referrerpolicy="strict-origin-when-cross-origin"
+    ></script>
+    <script src="/vendor/supabase.js?v=multi-review-2"></script>
+    <script src="/app.js?v=multi-review-2"></script>
+  </body>
+</html>

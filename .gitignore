@@ -1,0 +1,5 @@
+/.env
+data/toilets.json
+data/users.json
+public/uploads/*
+!public/uploads/.gitkeep
