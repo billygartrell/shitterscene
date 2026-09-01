@@ -193,9 +193,25 @@ function renderHeaderNav() {
 }
 
 async function fetchAuthConfig() {
-  const response = await fetch("/api/auth-config");
-  if (!response.ok) return { provider: "local" };
-  return response.json();
+  const staticConfig = window.SHITTERSCENE_CONFIG || {};
+  if (staticConfig.supabaseUrl && staticConfig.supabaseAnonKey) {
+    return {
+      provider: "supabase",
+      supabaseUrl: staticConfig.supabaseUrl,
+      supabaseAnonKey: staticConfig.supabaseAnonKey
+    };
+  }
+
+  try {
+    const response = await fetch("/api/auth-config", {
+      headers: { Accept: "application/json" }
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok || !contentType.includes("application/json")) return { provider: "local" };
+    return response.json();
+  } catch {
+    return { provider: "local" };
+  }
 }
 
 async function configureAuth() {
@@ -239,9 +255,115 @@ async function apiFetch(url, options = {}) {
 
 async function appUserFromSession(session) {
   if (!session?.access_token) return null;
+  if (supabaseClient) return upsertSupabaseProfile(session.user);
+
   const response = await apiFetch("/api/session");
   if (!response.ok) return null;
   return response.json();
+}
+
+function profileFromRow(row) {
+  return {
+    id: row.id,
+    displayName: row.display_name || row.email || "Bathroom Scout",
+    email: row.email || null,
+    authProvider: row.auth_provider || "supabase",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toiletFromRow(row) {
+  return {
+    id: row.id,
+    barName: row.bar_name,
+    userId: row.user_id,
+    rankedBy: row.ranked_by,
+    location: row.location,
+    state: row.state,
+    latitude: Number.isFinite(Number(row.latitude)) ? Number(row.latitude) : null,
+    longitude: Number.isFinite(Number(row.longitude)) ? Number(row.longitude) : null,
+    rating: Number(row.rating),
+    freeAccess: row.free_access || "unsure",
+    review: row.review,
+    photoUrl: row.photo_data_url || null,
+    createdAt: row.created_at
+  };
+}
+
+function cleanInputText(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function validateToiletPayload(payload) {
+  const location = cleanInputText(payload.location);
+  const rating = Number(payload.rating);
+  const review = cleanInputText(payload.review);
+  const freeAccess = cleanInputText(payload.freeAccess);
+
+  if (!location) return "Location is required.";
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return "Rating must be a whole number from 1 to 5.";
+  if (!review) return "Review is required.";
+  if (location.length > 160) return "Location must be 160 characters or less.";
+  if (review.length > 1200) return "Review must be 1200 characters or less.";
+  if (freeAccess && !["yes", "no", "unsure"].includes(freeAccess)) return "Free access must be yes, no, or not sure.";
+
+  return null;
+}
+
+async function upsertSupabaseProfile(authUser) {
+  if (!supabaseClient || !authUser?.id) return null;
+
+  const profile = {
+    id: authUser.id,
+    display_name:
+      cleanInputText(authUser.user_metadata?.display_name) ||
+      cleanInputText(authUser.user_metadata?.name) ||
+      cleanInputText(authUser.email) ||
+      "Bathroom Scout",
+    email: cleanInputText(authUser.email) || null,
+    auth_provider: "supabase",
+    updated_at: new Date().toISOString()
+  };
+
+  const { data, error } = await supabaseClient
+    .from("profiles")
+    .upsert(profile, { onConflict: "id" })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return profileFromRow(data);
+}
+
+async function createSupabaseToilet(payload) {
+  if (!supabaseClient || !currentUser?.id) throw new Error("Log in to add a bathroom report.");
+
+  const validationError = validateToiletPayload(payload);
+  if (validationError) throw new Error(validationError);
+
+  const row = {
+    user_id: currentUser.id,
+    ranked_by: currentUser.displayName || "Anonymous",
+    bar_name: cleanInputText(payload.location),
+    location: cleanInputText(payload.location),
+    state: cleanInputText(payload.state).toUpperCase() || null,
+    latitude: payload.latitude ? Number(payload.latitude) : null,
+    longitude: payload.longitude ? Number(payload.longitude) : null,
+    rating: Number(payload.rating),
+    free_access: cleanInputText(payload.freeAccess) || "unsure",
+    review: cleanInputText(payload.review),
+    photo_data_url: payload.photoDataUrl || null
+  };
+
+  const { data, error } = await supabaseClient
+    .from("toilets")
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return toiletFromRow(data);
 }
 
 function savedCurrentUserId() {
@@ -388,36 +510,123 @@ async function reverseLookupPlace(lat, lng) {
   const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   if (reverseLookupCache.has(cacheKey)) return reverseLookupCache.get(cacheKey);
 
-  const url = new URL("/api/reverse-geocode", window.location.origin);
-  url.searchParams.set("lat", String(lat));
-  url.searchParams.set("lng", String(lng));
-
   try {
+    const url = new URL("/api/reverse-geocode", window.location.origin);
+    url.searchParams.set("lat", String(lat));
+    url.searchParams.set("lng", String(lng));
+
     const response = await fetch(url.toString(), {
       headers: { Accept: "application/json" }
     });
-    if (!response.ok) throw new Error("Place lookup failed.");
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok || !contentType.includes("application/json")) throw new Error("Place lookup failed.");
 
     const result = await response.json();
     const label = result.place || "";
     reverseLookupCache.set(cacheKey, label);
     return label;
   } catch {
-    reverseLookupCache.set(cacheKey, "");
-    return "";
+    try {
+      const label = await reverseLookupPlaceDirect(lat, lng);
+      reverseLookupCache.set(cacheKey, label);
+      return label;
+    } catch {
+      reverseLookupCache.set(cacheKey, "");
+      return "";
+    }
   }
 }
 
 async function searchPlace(query) {
-  const url = new URL("/api/search-place", window.location.origin);
-  url.searchParams.set("q", query);
+  try {
+    const url = new URL("/api/search-place", window.location.origin);
+    url.searchParams.set("q", query);
+
+    const response = await fetch(url.toString(), {
+      headers: { Accept: "application/json" }
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok || !contentType.includes("application/json")) throw new Error("Search failed.");
+
+    const result = await response.json();
+    return result.place;
+  } catch {
+    return searchPlaceDirect(query);
+  }
+}
+
+function placeLabelFromReverseResult(result) {
+  if (!result) return "";
+
+  const address = result.address || {};
+  const namedPlace =
+    result.name ||
+    address.amenity ||
+    address.shop ||
+    address.tourism ||
+    address.leisure ||
+    address.building;
+  const locality = address.city || address.town || address.village || address.neighbourhood;
+  const street = [address.house_number, address.road].filter(Boolean).join(" ");
+
+  if (namedPlace && locality) return `${namedPlace}, ${locality}`;
+  if (namedPlace) return namedPlace;
+  if (street && locality) return `${street}, ${locality}`;
+  if (street) return street;
+
+  return result.display_name || "";
+}
+
+function placeLabelFromSearchResult(result) {
+  if (!result) return "";
+
+  const address = result.address || {};
+  const locality = address.city || address.town || address.village || address.county || address.state;
+  const namedPlace = result.name || address.amenity || address.shop || address.tourism;
+
+  if (namedPlace && locality) return `${namedPlace}, ${locality}`;
+  return result.display_name || namedPlace || locality || "";
+}
+
+async function reverseLookupPlaceDirect(lat, lng) {
+  const url = new URL("https://nominatim.openstreetmap.org/reverse");
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lon", String(lng));
+  url.searchParams.set("zoom", "18");
+  url.searchParams.set("addressdetails", "1");
 
   const response = await fetch(url.toString(), {
     headers: { Accept: "application/json" }
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "Search failed.");
-  return result.place;
+  if (!response.ok) throw new Error("Place lookup failed.");
+
+  return placeLabelFromReverseResult(await response.json());
+}
+
+async function searchPlaceDirect(query) {
+  const normalizedQuery = cleanSearchText(query);
+  if (!normalizedQuery || normalizedQuery.length < 2) throw new Error("Search for a city, address, or place.");
+
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("q", normalizedQuery);
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("addressdetails", "1");
+
+  const response = await fetch(url.toString(), {
+    headers: { Accept: "application/json" }
+  });
+  if (!response.ok) throw new Error("Search failed.");
+
+  const firstResult = (await response.json())[0];
+  return firstResult
+    ? {
+        label: placeLabelFromSearchResult(firstResult),
+        lat: Number(firstResult.lat),
+        lng: Number(firstResult.lon)
+      }
+    : null;
 }
 
 function startNewFromMap({ state, lat, lng, place }) {
@@ -1448,10 +1657,15 @@ function locateUser() {
     return;
   }
 
+  if (!window.isSecureContext) {
+    setLocationStatus("Location lookup needs the secure live HTTPS site.", true);
+    return;
+  }
+
   setLocateButtonLoading(true);
   setLocationStatus("Waiting for location permission...");
 
-  navigator.geolocation.getCurrentPosition(
+  const requestLocation = () => navigator.geolocation.getCurrentPosition(
     (position) => {
       const { latitude, longitude, accuracy } = position.coords;
       centerMapOnUser(latitude, longitude, accuracy);
@@ -1470,6 +1684,23 @@ function locateUser() {
       timeout: 10000
     }
   );
+
+  if (navigator.permissions?.query) {
+    navigator.permissions
+      .query({ name: "geolocation" })
+      .then((permission) => {
+        if (permission.state === "denied") {
+          setLocationStatus("Location is blocked for this site. Allow it in your browser's site settings, then try again.", true);
+          setLocateButtonLoading(false);
+          return;
+        }
+
+        requestLocation();
+      })
+      .catch(requestLocation);
+  } else {
+    requestLocation();
+  }
 }
 
 function renderOsmMap() {
@@ -1595,18 +1826,41 @@ function initOsmMap() {
 }
 
 async function fetchToilets() {
+  if (supabaseClient) {
+    const { data, error } = await supabaseClient
+      .from("toilets")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(toiletFromRow);
+  }
+
   const response = await fetch("/api/toilets");
   if (!response.ok) throw new Error("Could not load toilet entries.");
   return response.json();
 }
 
 async function fetchUsers() {
+  if (supabaseClient) {
+    const { data, error } = await supabaseClient
+      .from("profiles")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map(profileFromRow);
+  }
+
   const response = await fetch("/api/users");
   if (!response.ok) throw new Error("Could not load users.");
   return response.json();
 }
 
 async function createUser(displayName) {
+  if (supabaseClient) {
+    const { data } = await supabaseClient.auth.getUser();
+    return upsertSupabaseProfile(data.user);
+  }
+
   const response = await apiFetch("/api/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1727,14 +1981,19 @@ form.addEventListener("submit", async (event) => {
       photoDataUrl
     };
 
-    const response = await apiFetch("/api/toilets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    let result;
+    if (supabaseClient) {
+      result = await createSupabaseToilet(payload);
+    } else {
+      const response = await apiFetch("/api/toilets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
 
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not add toilet.");
+      result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not add toilet.");
+    }
 
     form.reset();
     selectedPhotoInput = null;
@@ -1845,7 +2104,7 @@ loginExistingForm.addEventListener("submit", async (event) => {
     const password = loginPasswordInput.value;
     let user;
 
-    if (username.toLowerCase() === "test" && password === "test") {
+    if (username.toLowerCase() === "test" && password === "test" && !supabaseClient) {
       const response = await fetch("/api/test-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1856,6 +2115,11 @@ loginExistingForm.addEventListener("submit", async (event) => {
       authSession = null;
       user = result;
     } else {
+      if (!supabaseClient) throw new Error("Supabase is not configured yet.");
+      if (username.toLowerCase() === "test") {
+        throw new Error("The test login only works in local development. Use a real account on the live site.");
+      }
+
       const { data, error } = await supabaseClient.auth.signInWithPassword({
         email: username,
         password

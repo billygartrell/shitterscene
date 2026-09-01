@@ -4,6 +4,7 @@
   "private": true,
   "description": "A tiny bathroom review database prototype.",
   "scripts": {
+    "build": "node scripts/write-config.js",
     "dev": "node server.js",
     "start": "node server.js"
   },
